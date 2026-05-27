@@ -67,12 +67,11 @@ class ILI9342InitTest < Test::Unit::TestCase
                  "MADCTL (0x36) command must be issued exactly once during init — currently #{madctl_count}. The duplicate comes from both INIT_COMMANDS and set_rotation; remove from INIT_COMMANDS."
   end
 
-  # ---- ILI9342C datasheet compliance (audit-ili9342c-datasheet-2026-05-10.md) ----
+  # ---- ILI9342C datasheet compliance ----
 
   def test_init_starts_with_extc_unlock
     # ILI9342C §8.3.24 SETEXTC: Level-2 commands (anything in 0xB0..0xFF range)
     # are NOP unless preceded by 0xC8 with payload [0xFF, 0x93, 0x42].
-    # See audit doc: docs/audit-ili9342c-datasheet-2026-05-10.md
     first_cmd = @spi.command_bytes.first
     assert_equal 0xC8, first_cmd,
                  "First command sent must be SETEXTC (0xC8) to unlock Level-2. Currently first = #{first_cmd&.to_s(16)}"

@@ -3,7 +3,7 @@ require 'gpio'
 
 class ILI9342
   # MADCTL bits: MY|MX|MV|ML|BGR|MH|0|0
-  # Values per docs/cores3-pinout-and-init.md (CoreS3 native landscape, BGR).
+  # Values per the CoreS3 panel reference (CoreS3 native landscape, BGR).
   MADCTL_LANDSCAPE      = 0x08  # default: swap_xy=false, mirror_*=false, BGR=1
   MADCTL_PORTRAIT       = 0x68  # MV+MX+BGR (rotate 90° CW)
   MADCTL_LANDSCAPE_FLIP = 0xC8  # MY+MX+BGR (180° rotation)
