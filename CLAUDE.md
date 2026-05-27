@@ -60,6 +60,10 @@ correct hardware behavior — see `fill_window` implementation.
 - On-device: declared via `add_test_dependency 'picoruby-picotest'` in
   `mrbgem.rake`; not wired to a host rake target.
 
+## PicoRuby on-device require
+
+On device: `require 'ili9342'` (hyphenated, strip `picoruby-` prefix). Underscore form works only in CRuby host context.
+
 ## Git
 
 - Conventional Commits: `feat` / `fix` / `docs` / `test` / `refactor` / `chore`.

@@ -37,6 +37,9 @@ cs_pin = GPIO.new(3, GPIO::OUT)
 # via the IO expander instead.
 rst_pin = GPIO.new(1, GPIO::OUT)  # dummy — driven by AW9523, not directly
 bl_pin  = GPIO.new(1, GPIO::OUT)  # dummy — driven by AXP2101 DLDO1 rail
+# Note: both rst_pin and bl_pin point to the same unwired dummy pin (1).
+# This is intentional and harmless: real reset and backlight are handled
+# externally via AW9523 IO expander and AXP2101 PMIC respectively.
 
 lcd = ILI9342.new(
   spi: spi,
@@ -58,7 +61,7 @@ lcd.draw_pixel(10, 10, ILI9342::Color::RED)
 ### Constructor
 
 ```ruby
-ILI9342.new(spi:, dc_pin:, cs_pin:, rst_pin:, bl_pin:, width:, height:, rotation: :landscape)
+ILI9342.new(spi: spi, dc_pin: dc_pin, cs_pin: cs_pin, rst_pin: rst_pin, bl_pin: bl_pin, width: 320, height: 240, rotation: :landscape)
 ```
 
 Performs hardware reset, sends the init sequence, sets rotation, and enables backlight.
