@@ -188,11 +188,60 @@ class ILI9342
     end
   end
 
+  # Render `text` via a Shinonome glyph tuple at (x, y).
+  # font: one of "go12"/"go16"/"min12"/"min16"/"maru12"; scale 1..4.
+  def draw_text(x, y, text, font: "go16", scale: 1, fg: Color::WHITE, bg: Color::BLACK)
+    tuple = Shinonome.send(font, text, scale)
+    return unless tuple
+    draw_glyphs(x, y, tuple, fg, bg)
+  end
+
+  # Blit a Shinonome [height, total_width, widths[], glyphs[]] tuple at (x, y).
+  # Public so it is host-testable with a literal tuple (no font gem needed).
+  def draw_glyphs(x, y, tuple, fg, bg)
+    height = tuple[0]
+    widths = tuple[2]
+    glyphs = tuple[3]
+    gx = x
+    i = 0
+    while i < widths.size
+      blit_glyph(gx, y, widths[i], height, glyphs[i], fg, bg)
+      gx += widths[i]
+      i += 1
+    end
+  end
+
   private
 
   def set_window(x0, y0, x1, y1)
     write_command(CMD_CASET, [(x0 >> 8) & 0xFF, x0 & 0xFF, (x1 >> 8) & 0xFF, x1 & 0xFF])
     write_command(CMD_RASET, [(y0 >> 8) & 0xFF, y0 & 0xFF, (y1 >> 8) & 0xFF, y1 & 0xFF])
+  end
+
+  # Stream one glyph cell: fg pixel where the row bit is set, bg otherwise.
+  # One address window + one RAMWR transaction per glyph (not per pixel).
+  def blit_glyph(x, y, w, h, rows, fg, bg)
+    set_window(x, y, x + w - 1, y + h - 1)
+    fg_hi = (fg >> 8) & 0xFF; fg_lo = fg & 0xFF
+    bg_hi = (bg >> 8) & 0xFF; bg_lo = bg & 0xFF
+    write_pixels do
+      row_i = 0
+      while row_i < h
+        row = rows[row_i]
+        bytes = []
+        bit = w - 1
+        while bit >= 0
+          if ((row >> bit) & 1) == 1
+            bytes << fg_hi << fg_lo
+          else
+            bytes << bg_hi << bg_lo
+          end
+          bit -= 1
+        end
+        @spi.write(bytes)
+        row_i += 1
+      end
+    end
   end
 
   # Begin RAMWR transaction, yield to block that writes pixel bytes via @spi,
