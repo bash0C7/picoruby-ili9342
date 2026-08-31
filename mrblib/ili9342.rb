@@ -121,14 +121,6 @@ class ILI9342
     end
   end
 
-  # Bresenham, emitting each run of pixels that share a row as one windowed
-  # write rather than one per pixel. draw_pixel costs two address-window
-  # commands plus a RAMWR transaction, and that per-pixel overhead — not the
-  # background fill, which is already chunked — is what dominates a drawing:
-  # measured on a CoreS3 2026-09-01, the ~200 pixels of a face took ~900ms,
-  # against 75ms for a command that touches no pixels at all.
-  # A horizontal line becomes a single transaction; a vertical one is
-  # unchanged, since every pixel is its own row.
   def draw_line(x0, y0, x1, y1, rgb565)
     dx = (x1 - x0).abs
     dy = -(y1 - y0).abs
@@ -137,19 +129,8 @@ class ILI9342
     err = dx + dy
     x = x0
     y = y0
-    run_y = y
-    run_a = x
-    run_b = x
     loop do
-      if y == run_y
-        run_a = x if x < run_a
-        run_b = x if x > run_b
-      else
-        write_span(run_a, run_b, run_y, rgb565)
-        run_y = y
-        run_a = x
-        run_b = x
-      end
+      draw_pixel(x, y, rgb565)
       break if x == x1 && y == y1
       e2 = err * 2
       if e2 >= dy
@@ -161,17 +142,6 @@ class ILI9342
         y += sy
       end
     end
-    write_span(run_a, run_b, run_y, rgb565)
-  end
-
-  # One horizontal run: clipped like draw_pixel, then a single address window
-  # and RAMWR for the whole span.
-  def write_span(xa, xb, y, rgb565)
-    return if y < 0 || y >= @height
-    x0 = xa < 0 ? 0 : xa
-    x1 = xb > @width - 1 ? @width - 1 : xb
-    return if x0 > x1
-    fill_window(x0, y, x1, y, rgb565)
   end
 
   def draw_ellipse(cx, cy, rx, ry, rgb565, fill: false)

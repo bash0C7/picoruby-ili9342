@@ -256,20 +256,12 @@ class ILI9342DrawLineTest < Test::Unit::TestCase
     @spi.reset_log!
   end
 
-  # A run of pixels on one row is a single address window and a single RAMWR,
-  # not one per pixel. The per-pixel form is what made drawing a face cost
-  # ~900ms on a CoreS3 (measured 2026-09-01) while the pixels themselves are
-  # a rounding error — so the count of transactions is the thing to pin, and
-  # the pixel data has to survive the batching intact.
-  def test_horizontal_line_is_one_transaction_carrying_every_pixel
+  def test_horizontal_line_writes_n_pixels
     # 10 pixels from (5, 5) to (14, 5)
     @display.draw_line(5, 5, 14, 5, 0xFFFF)
     bytes = @spi.writes.select { |b| b.is_a?(Integer) }
-    assert_equal 1, bytes.count(ILI9342::CMD_RAMWR),
-                 "horizontal run must be one windowed write"
-    # 0xFFFF pixels are the only 0xFF bytes here — window payloads are small
-    # coordinates.
-    assert_equal 10, bytes.count(0xFF) / 2, "all 10 pixels must still be sent"
+    pixel_writes = bytes.count(ILI9342::CMD_RAMWR)
+    assert_equal 10, pixel_writes, "horizontal 10-px line must trigger 10 single-pixel writes"
   end
 
   def test_vertical_line_writes_n_pixels
@@ -302,16 +294,12 @@ class ILI9342DrawEllipseTest < Test::Unit::TestCase
     assert pixel_count <= 80, "and not more than 80"
   end
 
-  # Count pixels, not transactions: a filled ellipse covers more of the panel
-  # than its outline, but it is drawn as row runs and so takes FEWER windowed
-  # writes. Asserting transactions here would have made the batching look
-  # like a regression.
-  def test_filled_ellipse_sends_more_pixels_than_outline
+  def test_filled_ellipse_writes_more_pixels_than_outline
     @display.draw_ellipse(50, 50, 10, 5, 0xFFFF, fill: false)
-    outline_pixels = @spi.writes.count(0xFF) / 2
+    outline_count = @spi.writes.count(ILI9342::CMD_RAMWR)
     @spi.reset_log!
     @display.draw_ellipse(50, 50, 10, 5, 0xFFFF, fill: true)
-    fill_pixels = @spi.writes.count(0xFF) / 2
-    assert fill_pixels > outline_pixels, "filled ellipse must cover more pixels than outline"
+    fill_count = @spi.writes.count(ILI9342::CMD_RAMWR)
+    assert fill_count > outline_count, "filled ellipse must write more pixels than outline"
   end
 end
