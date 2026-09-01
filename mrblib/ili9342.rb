@@ -269,7 +269,7 @@ class ILI9342
     ensure
       rows = @batch
       @batch = nil
-      buf = String.new
+      buf = ""
       i = 0
       while i < rows.size
         buf << rows[i]
