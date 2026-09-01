@@ -247,17 +247,34 @@ class ILI9342
   # captured automatically here; draw_text and blit_glyph stream their own
   # per-glyph windows straight to the panel and are NOT captured by a
   # batch. Nesting is not supported.
+  #
+  # The buffer is an Array of per-row Strings, not one String for the
+  # whole rectangle. String#[]= (str_replace_partial, mruby's
+  # src/string.c) costs time proportional to the size of the String it
+  # splices into, no matter how small the slice is — against a single
+  # 20KB rectangle buffer that costs ~2.5ms per primitive at PSRAM speed
+  # on a CoreS3, and a face draws 30-66 of them. A 272-byte row is ~74x
+  # smaller, so each splice lands in a fraction of that. The rows are
+  # concatenated into one buffer once at flush, so the panel sees the
+  # same byte stream either way.
   def batch(x, y, w, h, bg_rgb565)
     @batch_x = x
     @batch_y = y
     @batch_w = w
     @batch_h = h
-    @batch = pixel_pair(bg_rgb565) * (w * h)
+    blank = pixel_pair(bg_rgb565) * w
+    @batch = Array.new(h) { blank.dup }
     begin
       yield
     ensure
-      buf = @batch
+      rows = @batch
       @batch = nil
+      buf = ""
+      i = 0
+      while i < rows.size
+        buf << rows[i]
+        i += 1
+      end
       blit_window(x, y, x + w - 1, y + h - 1, buf)
     end
   end
@@ -377,12 +394,11 @@ class ILI9342
 
     row = pixel_pair(rgb565) * (cx1 - cx0 + 1)
     row_bytes = row.bytesize
-    bx0 = cx0 - @batch_x
+    offset = (cx0 - @batch_x) * 2
     by  = cy0 - @batch_y
     by1 = cy1 - @batch_y
     while by <= by1
-      offset = (by * @batch_w + bx0) * 2
-      @batch[offset, row_bytes] = row
+      @batch[by][offset, row_bytes] = row
       by += 1
     end
   end
