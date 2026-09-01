@@ -257,13 +257,34 @@ class ILI9342
   # smaller, so each splice lands in a fraction of that. The rows are
   # concatenated into one buffer once at flush, so the panel sees the
   # same byte stream either way.
+  #
+  # The rows below are built with a while loop, not `Array.new(h) { blank.dup }`.
+  # mruby implements Array.new(n) { ... } in C and calls mrb_yield once per
+  # element (src/array.c, mrb_ary_init); String#dup nests the same way,
+  # dispatching initialize_copy. Each such call nests a whole mrb_vm_exec
+  # back onto the C stack: in the shipped firmware ELF its Xtensa prologue
+  # reserves 2896 bytes, plus 144 for mrb_yield and 96 for mrb_vm_run, about
+  # 3.1KB per nested element. The picoruby FreeRTOS task that runs the VM
+  # has an 8192-byte stack (PICORB_TASK_STACK_SIZE, R2P2-ESP32's
+  # picoruby-esp32.c:43), so a handful of nested rows overflow it — this
+  # boot-looped a CoreS3 at the first #batch call, while the single-buffer
+  # form it replaced, which called String#* once from the VM's own frame
+  # and nested nothing, ran 53 face commands without crashing. `blank * w`
+  # and `rows <<` are both C functions called from the current VM frame,
+  # so nothing nests here.
   def batch(x, y, w, h, bg_rgb565)
     @batch_x = x
     @batch_y = y
     @batch_w = w
     @batch_h = h
-    blank = pixel_pair(bg_rgb565) * w
-    @batch = Array.new(h) { blank.dup }
+    blank = pixel_pair(bg_rgb565)
+    rows = []
+    i = 0
+    while i < h
+      rows << blank * w
+      i += 1
+    end
+    @batch = rows
     begin
       yield
     ensure
