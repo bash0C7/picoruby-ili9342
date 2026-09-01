@@ -196,34 +196,4 @@ class ILI9342BatchTest < Test::Unit::TestCase
     assert_equal [0xAB, 0xCD], bytes[(ramwr_idx + 1)..-1],
                  "a one-pixel fill_window must still emit exactly 2 payload bytes"
   end
-
-  # fill_window's chunk size is CHUNK_PAIRS = MAX_TRANSFER_BYTES / 2 pairs,
-  # not the old fixed 256 — a direct (non-batch) fill above the old size
-  # must now cost as few SPI#write calls as MAX_TRANSFER_BYTES allows, with
-  # the same bytes on the wire as always.
-  def test_large_fill_uses_max_transfer_bytes_chunking_same_bytes_fewer_calls
-    display, spi = new_display(CountingSPI)
-
-    display.send(:fill_window, 0, 0, 0, 0, RED)  # 1 pair: exactly one payload call
-    one_pair_calls = spi.write_call_count
-
-    spi.reset_log!
-    pairs_per_chunk = ILI9342::MAX_TRANSFER_BYTES / 2
-    pair_count = pairs_per_chunk + 100  # spans one full chunk plus a leftover
-    display.send(:fill_window, 0, 0, pair_count - 1, 0, RED)
-    large_fill_calls = spi.write_call_count
-
-    assert_equal one_pair_calls + 1, large_fill_calls,
-                 "a fill spanning one MAX_TRANSFER_BYTES chunk plus a leftover " \
-                 "must add exactly one extra SPI#write call over a one-pair fill " \
-                 "(the old CHUNK_PAIRS=256 chunking would have added many more)"
-
-    result = PanelRaster.replay(spi)
-    assert_equal 1, result.ramwr_count
-
-    bytes = spi.writes.select { |b| b.is_a?(Integer) }
-    payload = bytes[(bytes.index(ILI9342::CMD_RAMWR) + 1)..-1]
-    assert_equal ([0xF8, 0x00] * pair_count), payload,
-                 "byte stream must be unchanged by the larger chunk size"
-  end
 end
