@@ -239,16 +239,14 @@ class ILI9342
     end
   end
 
-  # Collect a whole drawing into one offscreen buffer and push it as a
-  # single address window + RAMWR, instead of one transaction per
-  # primitive. Panel latency is ~0.199s + ~0.0051s per transaction
-  # regardless of pixel count (measured on a CoreS3, 2026-09-01, 6 faces x 8
-  # rounds, R^2=0.990), so a face's 31-68 fill_window calls dominate its
-  # round trip far more than the few hundred to few thousand pixels they
-  # carry. draw_pixel, draw_rect, draw_line and draw_ellipse all bottom out
-  # in fill_window and so are captured automatically here; draw_text and
-  # blit_glyph stream their own per-glyph windows straight to the panel and
-  # are NOT captured by a batch. Nesting is not supported.
+  # Collect a whole drawing into one offscreen buffer and push it with a
+  # single blit_window call, instead of paying every primitive's own
+  # set_window + write_pixels SPI#write calls — see MAX_TRANSFER_BYTES for
+  # the measured per-call cost this amortises. draw_pixel, draw_rect,
+  # draw_line and draw_ellipse all bottom out in fill_window and so are
+  # captured automatically here; draw_text and blit_glyph stream their own
+  # per-glyph windows straight to the panel and are NOT captured by a
+  # batch. Nesting is not supported.
   def batch(x, y, w, h, bg_rgb565)
     @batch_x = x
     @batch_y = y
@@ -314,16 +312,35 @@ class ILI9342
     ((rgb565 >> 8) & 0xFF).chr + (rgb565 & 0xFF).chr
   end
 
-  # Fill the address-window rectangle with one repeated RGB565 colour. Uses
-  # 256-pair chunks so per-spi.write overhead is amortised — one DMA
-  # transaction per chunk instead of one per pixel. The chunk is a String,
-  # not an Array: SPI#write memcpys a String but unboxes an Array element by
-  # element (picoruby-spi/src/mruby/spi.c), and it is only built when a full
-  # chunk is actually due — a one-pixel fill used to allocate and discard a
-  # 256-pair chunk on every call. The byte stream emitted is identical to
-  # the per-pixel form.
-  CHUNK_PAIRS = 256
+  # Each SPI#write call costs about 0.85ms almost regardless of what it
+  # carries — measured on a CoreS3, 2026-09-01, fitting three candidate
+  # models to the same sweep: call count (intercept 0.181s, slope
+  # 0.853ms/call, R^2=0.991 — the intercept matches the independently
+  # measured floor for the same BLE path doing no LCD work), RAMWR
+  # transaction count (intercept 0.199s, slope 5.104ms/transaction,
+  # R^2=0.990 — overshoots that floor by exactly the extra chunk calls two
+  # large fills cost, which a transaction count can't see), and byte count
+  # (R^2=0.118 — explains almost nothing). So the driver's job everywhere it
+  # streams pixel data is to make as few SPI#write calls as the payload
+  # allows: one call per MAX_TRANSFER_BYTES, the most a call can carry.
+  # ESP-IDF caps a single DMA transfer at 4092 bytes when spi_bus_config_t
+  # leaves max_transfer_sz at 0, which is what the picoruby-spi ESP32 port
+  # uses (esp-idf/components/esp_driver_spi/src/gpspi/spi_common.c:
+  # "dma_desc_ct = 1; //default to 4k when max is not given").
+  MAX_TRANSFER_BYTES = 4092
 
+  # Pairs per fill_window chunk: the most that still fits one SPI#write
+  # call under MAX_TRANSFER_BYTES (2 bytes/pixel).
+  CHUNK_PAIRS = MAX_TRANSFER_BYTES / 2
+
+  # Fill the address-window rectangle with one repeated RGB565 colour, in
+  # CHUNK_PAIRS-sized chunks. The chunk is a String, not an Array: SPI#write
+  # memcpys a String but unboxes an Array element by element
+  # (picoruby-spi/src/mruby/spi.c), and it is only built when a full chunk
+  # is actually due — a one-pixel fill used to allocate and discard one on
+  # every call. The byte stream emitted is identical to the per-pixel form
+  # regardless of chunk size.
+  #
   # When a batch is open, redirect into its offscreen buffer instead of the
   # panel — see #batch.
   def fill_window(x0, y0, x1, y1, rgb565)
@@ -370,17 +387,10 @@ class ILI9342
     end
   end
 
-  # ESP-IDF caps a single DMA transfer at 4092 bytes when spi_bus_config_t
-  # leaves max_transfer_sz at 0, which is what the picoruby-spi ESP32 port
-  # uses (esp-idf/components/esp_driver_spi/src/gpspi/spi_common.c:
-  # "dma_desc_ct = 1; //default to 4k when max is not given"). A batch
-  # payload larger than this has to cross several SPI#write calls, but
-  # write_pixels keeps CS asserted across all of them, so it stays one
-  # RAMWR transaction.
-  MAX_TRANSFER_BYTES = 4092
-
   # Push a prepared byte String for a batch: one set_window plus one
-  # write_pixels, split only where MAX_TRANSFER_BYTES forces it.
+  # write_pixels, chunked at MAX_TRANSFER_BYTES like fill_window.
+  # write_pixels keeps CS asserted across every chunk, so it still lands as
+  # a single RAMWR transaction.
   def blit_window(x0, y0, x1, y1, bytes)
     set_window(x0, y0, x1, y1)
     write_pixels do
