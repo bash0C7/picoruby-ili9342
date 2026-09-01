@@ -66,6 +66,7 @@ class ILI9342
     @width  = width
     @height = height
     @rotation = rotation
+    @batch  = nil  # buffer String of an open batch (see #batch); nil = none open
 
     hardware_reset
     send_init_sequence
@@ -97,10 +98,7 @@ class ILI9342
 
   def draw_pixel(x, y, rgb565)
     return if x < 0 || x >= @width || y < 0 || y >= @height
-    set_window(x, y, x, y)
-    write_pixels do
-      @spi.write((rgb565 >> 8) & 0xFF, rgb565 & 0xFF)
-    end
+    fill_window(x, y, x, y, rgb565)
   end
 
   def draw_rect(x, y, w, h, rgb565, fill: false)
@@ -241,6 +239,31 @@ class ILI9342
     end
   end
 
+  # Collect a whole drawing into one offscreen buffer and push it as a
+  # single address window + RAMWR, instead of one transaction per
+  # primitive. Panel latency is ~0.199s + ~0.0051s per transaction
+  # regardless of pixel count (measured on a CoreS3, 2026-09-01, 6 faces x 8
+  # rounds, R^2=0.990), so a face's 31-68 fill_window calls dominate its
+  # round trip far more than the few hundred to few thousand pixels they
+  # carry. draw_pixel, draw_rect, draw_line and draw_ellipse all bottom out
+  # in fill_window and so are captured automatically here; draw_text and
+  # blit_glyph stream their own per-glyph windows straight to the panel and
+  # are NOT captured by a batch. Nesting is not supported.
+  def batch(x, y, w, h, bg_rgb565)
+    @batch_x = x
+    @batch_y = y
+    @batch_w = w
+    @batch_h = h
+    @batch = pixel_pair(bg_rgb565) * (w * h)
+    begin
+      yield
+    ensure
+      buf = @batch
+      @batch = nil
+      blit_window(x, y, x + w - 1, y + h - 1, buf)
+    end
+  end
+
   private
 
   def set_window(x0, y0, x1, y1)
@@ -285,22 +308,90 @@ class ILI9342
     @cs.write(1)
   end
 
-  # Fill the address-window rectangle with one repeated RGB565 colour.
-  # Uses 256-pair chunks so per-spi.write overhead is amortised — one DMA
-  # transaction per chunk instead of one per pixel. The byte stream emitted
-  # is identical to the per-pixel form.
+  # One RGB565 pixel as the two bytes the panel expects, as a String — the
+  # unit fill_window, fill_batch and batch build their byte streams from.
+  def pixel_pair(rgb565)
+    ((rgb565 >> 8) & 0xFF).chr + (rgb565 & 0xFF).chr
+  end
+
+  # Fill the address-window rectangle with one repeated RGB565 colour. Uses
+  # 256-pair chunks so per-spi.write overhead is amortised — one DMA
+  # transaction per chunk instead of one per pixel. The chunk is a String,
+  # not an Array: SPI#write memcpys a String but unboxes an Array element by
+  # element (picoruby-spi/src/mruby/spi.c), and it is only built when a full
+  # chunk is actually due — a one-pixel fill used to allocate and discard a
+  # 256-pair chunk on every call. The byte stream emitted is identical to
+  # the per-pixel form.
   CHUNK_PAIRS = 256
 
+  # When a batch is open, redirect into its offscreen buffer instead of the
+  # panel — see #batch.
   def fill_window(x0, y0, x1, y1, rgb565)
+    if @batch
+      fill_batch(x0, y0, x1, y1, rgb565)
+      return
+    end
+
     set_window(x0, y0, x1, y1)
-    hi = (rgb565 >> 8) & 0xFF
-    lo = rgb565 & 0xFF
-    chunk = [hi, lo] * CHUNK_PAIRS
+    pair = pixel_pair(rgb565)
     pair_count = (x1 - x0 + 1) * (y1 - y0 + 1)
     full_chunks, leftover_pairs = pair_count.divmod(CHUNK_PAIRS)
     write_pixels do
-      full_chunks.times { @spi.write(chunk) }
-      @spi.write([hi, lo] * leftover_pairs) if leftover_pairs > 0
+      if full_chunks > 0
+        chunk = pair * CHUNK_PAIRS
+        full_chunks.times { @spi.write(chunk) }
+      end
+      @spi.write(pair * leftover_pairs) if leftover_pairs > 0
+    end
+  end
+
+  # Splice a filled rectangle into the open batch buffer, in the same
+  # coordinate space fill_window uses for the panel. Callers up the stack
+  # (draw_rect, write_span, draw_pixel) only clip to @width/@height, so this
+  # clips again to the batch rectangle the same way write_span clips to the
+  # panel — otherwise a primitive that reaches past the batch edge would
+  # write outside the buffer instead of being cropped by it.
+  def fill_batch(x0, y0, x1, y1, rgb565)
+    cx0 = [x0, @batch_x].max
+    cy0 = [y0, @batch_y].max
+    cx1 = [x1, @batch_x + @batch_w - 1].min
+    cy1 = [y1, @batch_y + @batch_h - 1].min
+    return if cx0 > cx1 || cy0 > cy1
+
+    row = pixel_pair(rgb565) * (cx1 - cx0 + 1)
+    row_bytes = row.bytesize
+    bx0 = cx0 - @batch_x
+    by  = cy0 - @batch_y
+    by1 = cy1 - @batch_y
+    while by <= by1
+      offset = (by * @batch_w + bx0) * 2
+      @batch[offset, row_bytes] = row
+      by += 1
+    end
+  end
+
+  # ESP-IDF caps a single DMA transfer at 4092 bytes when spi_bus_config_t
+  # leaves max_transfer_sz at 0, which is what the picoruby-spi ESP32 port
+  # uses (esp-idf/components/esp_driver_spi/src/gpspi/spi_common.c:
+  # "dma_desc_ct = 1; //default to 4k when max is not given"). A batch
+  # payload larger than this has to cross several SPI#write calls, but
+  # write_pixels keeps CS asserted across all of them, so it stays one
+  # RAMWR transaction.
+  MAX_TRANSFER_BYTES = 4092
+
+  # Push a prepared byte String for a batch: one set_window plus one
+  # write_pixels, split only where MAX_TRANSFER_BYTES forces it.
+  def blit_window(x0, y0, x1, y1, bytes)
+    set_window(x0, y0, x1, y1)
+    write_pixels do
+      pos = 0
+      total = bytes.bytesize
+      while pos < total
+        n = total - pos
+        n = MAX_TRANSFER_BYTES if n > MAX_TRANSFER_BYTES
+        @spi.write(bytes.byteslice(pos, n))
+        pos += n
+      end
     end
   end
 
