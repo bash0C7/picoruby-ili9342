@@ -15,7 +15,9 @@
 #define CMD_CASET 0x2A
 #define CMD_RASET 0x2B
 #define CMD_RAMWR 0x2C
-#define CHUNK_PIXELS 2048   /* 4 KB per SPI#write */
+/* One SPI#write per chunk. The ESP32 bus is created without max_transfer_sz, so
+ * esp_driver_spi caps a transfer at one DMA descriptor: 4092 bytes. Stay under it. */
+#define CHUNK_PIXELS 1024
 
 typedef struct {
   mrb_state *mrb;
