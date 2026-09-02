@@ -1,11 +1,13 @@
 # picoruby-ili9342
 
-A pure Ruby ILI9342C LCD SPI driver for PicoRuby.
+An ILI9342C LCD SPI driver for PicoRuby: Ruby init and API, C drawing primitives.
 
 Targets the ILI9342C 320x240 2.0" IPS panel (as found on the M5Stack CoreS3).
 Implements datasheet-compliant initialization (SETEXTC Level-2 unlock, SWRESET,
-SLPOUT, COLMOD 16-bit, INVON, DISPON), MADCTL rotation, and pixel drawing
-primitives over a generic SPI/GPIO interface.
+SLPOUT, COLMOD 16-bit, INVON, DISPON), MADCTL rotation, and drawing
+primitives over injected SPI/GPIO objects. `fill_rect`, `draw_pixel`,
+`draw_line`, and the ellipse are C (`src/mruby/ili9342.c`): one Ruby call
+per shape, pixel data streamed in 4 KB Strings.
 
 ## Installation
 
@@ -17,9 +19,10 @@ conf.gem github: 'bash0C7/picoruby-ili9342'
 
 ## Dependencies
 
-- `picoruby-spi`: SPI bus communication (PicoRuby built-in)
-- `picoruby-gpio`: GPIO pin control (PicoRuby built-in)
-- `picoruby-machine`: `Machine.delay_ms` timing (PicoRuby built-in)
+- `picoruby-machine`: `Machine.delay_ms` timing
+- `picoruby-shinonome`: fonts for `draw_text`
+
+The SPI and GPIO objects are passed in by the caller (`picoruby-spi` / `picoruby-gpio` on device).
 
 ## Quick Start
 
@@ -103,6 +106,7 @@ lcd.draw_pixel(x, y, rgb565)
 lcd.draw_line(x0, y0, x1, y1, rgb565)                    # Bresenham
 lcd.draw_rect(x, y, w, h, rgb565)                         # outline
 lcd.draw_rect(x, y, w, h, rgb565, fill: true)             # filled rectangle
+lcd.fill_rect(x, y, w, h, rgb565)                         # same, C entry point
 lcd.draw_ellipse(cx, cy, rx, ry, rgb565)                  # outline
 lcd.draw_ellipse(cx, cy, rx, ry, rgb565, fill: true)      # filled ellipse
 ```
@@ -123,17 +127,17 @@ ILI9342::Color::BLUE    # => 0x001F
 
 ## Development
 
-Host-side test suite uses CRuby + test-unit with FakeSPI / FakeGPIO doubles:
+Tests are picotest, run on a host picoruby VM with this gem (C included)
+compiled in from `build_config/picoruby-test.rb`:
 
 ```bash
-bundle install
-bundle exec rake test
+PICORUBY_ROOT=path/to/picoruby rake test
 ```
 
-Tests cover harness sanity, init sequence compliance (SETEXTC unlock, MADCTL,
-DISPON, absence of ILI9341-only commands), color constants, fill pixel count,
-CS assertion across bulk writes, draw_pixel, draw_rect, draw_line, and
-draw_ellipse.
+FakeSPI / FakeGPIO doubles live in `test/ili9342_test.rb`. Tests cover the init
+sequence (SETEXTC unlock, MADCTL, DISPON, absence of ILI9341-only commands),
+color constants, fill byte count and CS assertion across the pixel stream,
+clipping, draw_pixel, draw_rect, draw_line, draw_ellipse, and glyph blitting.
 
 ## License
 

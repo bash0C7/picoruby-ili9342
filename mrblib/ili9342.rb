@@ -1,6 +1,6 @@
-require 'spi'
-require 'gpio'
-
+# ILI9342C over an injected SPI object and DC/CS/RST/BL GPIO objects. The
+# drawing primitives (fill_rect / draw_pixel / draw_line / _draw_ellipse) are C:
+# src/mruby/ili9342.c.
 class ILI9342
   # MADCTL bits: MY|MX|MV|ML|BGR|MH|0|0
   # Values per the CoreS3 panel reference (CoreS3 native landscape, BGR).
@@ -92,130 +92,25 @@ class ILI9342
   end
 
   def fill(rgb565)
-    fill_window(0, 0, @width - 1, @height - 1, rgb565)
-  end
-
-  def draw_pixel(x, y, rgb565)
-    return if x < 0 || x >= @width || y < 0 || y >= @height
-    set_window(x, y, x, y)
-    write_pixels do
-      @spi.write((rgb565 >> 8) & 0xFF, rgb565 & 0xFF)
-    end
+    fill_rect(0, 0, @width, @height, rgb565)
   end
 
   def draw_rect(x, y, w, h, rgb565, fill: false)
     return if w <= 0 || h <= 0
-    x0 = [x, 0].max
-    y0 = [y, 0].max
-    x1 = [x + w - 1, @width - 1].min
-    y1 = [y + h - 1, @height - 1].min
-    return if x0 > x1 || y0 > y1
-
     if fill
-      fill_window(x0, y0, x1, y1, rgb565)
+      fill_rect(x, y, w, h, rgb565)
     else
-      draw_line(x0, y0, x1, y0, rgb565)
-      draw_line(x0, y1, x1, y1, rgb565)
-      draw_line(x0, y0, x0, y1, rgb565)
-      draw_line(x1, y0, x1, y1, rgb565)
+      x1 = x + w - 1
+      y1 = y + h - 1
+      draw_line(x, y, x1, y, rgb565)
+      draw_line(x, y1, x1, y1, rgb565)
+      draw_line(x, y, x, y1, rgb565)
+      draw_line(x1, y, x1, y1, rgb565)
     end
-  end
-
-  # Bresenham, emitting each run of pixels that share a row as one windowed
-  # write rather than one per pixel. draw_pixel costs two address-window
-  # commands plus a RAMWR transaction, and that per-pixel overhead — not the
-  # background fill, which is already chunked — is what dominates a drawing:
-  # measured on a CoreS3 2026-09-01, the ~200 pixels of a face took ~900ms,
-  # against 75ms for a command that touches no pixels at all.
-  # A horizontal line becomes a single transaction; a vertical one is
-  # unchanged, since every pixel is its own row.
-  def draw_line(x0, y0, x1, y1, rgb565)
-    dx = (x1 - x0).abs
-    dy = -(y1 - y0).abs
-    sx = x0 < x1 ? 1 : -1
-    sy = y0 < y1 ? 1 : -1
-    err = dx + dy
-    x = x0
-    y = y0
-    run_y = y
-    run_a = x
-    run_b = x
-    loop do
-      if y == run_y
-        run_a = x if x < run_a
-        run_b = x if x > run_b
-      else
-        write_span(run_a, run_b, run_y, rgb565)
-        run_y = y
-        run_a = x
-        run_b = x
-      end
-      break if x == x1 && y == y1
-      e2 = err * 2
-      if e2 >= dy
-        err += dy
-        x += sx
-      end
-      if e2 <= dx
-        err += dx
-        y += sy
-      end
-    end
-    write_span(run_a, run_b, run_y, rgb565)
-  end
-
-  # One horizontal run: clipped like draw_pixel, then a single address window
-  # and RAMWR for the whole span.
-  def write_span(xa, xb, y, rgb565)
-    return if y < 0 || y >= @height
-    x0 = xa < 0 ? 0 : xa
-    x1 = xb > @width - 1 ? @width - 1 : xb
-    return if x0 > x1
-    fill_window(x0, y, x1, y, rgb565)
   end
 
   def draw_ellipse(cx, cy, rx, ry, rgb565, fill: false)
-    return if rx <= 0 || ry <= 0
-
-    rx2 = rx * rx
-    ry2 = ry * ry
-    two_rx2 = 2 * rx2
-    two_ry2 = 2 * ry2
-
-    # Region 1
-    x = 0
-    y = ry
-    px = 0
-    py = two_rx2 * y
-    p = (ry2 - rx2 * ry + rx2 / 4.0).round
-    plot_ellipse_points(cx, cy, x, y, rgb565, fill)
-    while px < py
-      x += 1
-      px += two_ry2
-      if p < 0
-        p += ry2 + px
-      else
-        y -= 1
-        py -= two_rx2
-        p += ry2 + px - py
-      end
-      plot_ellipse_points(cx, cy, x, y, rgb565, fill)
-    end
-
-    # Region 2
-    p = (ry2 * (x + 0.5)**2 + rx2 * (y - 1)**2 - rx2 * ry2).round
-    while y > 0
-      y -= 1
-      py -= two_rx2
-      if p > 0
-        p += rx2 - py
-      else
-        x += 1
-        px += two_ry2
-        p += rx2 - py + px
-      end
-      plot_ellipse_points(cx, cy, x, y, rgb565, fill)
-    end
+    _draw_ellipse(cx, cy, rx, ry, rgb565, fill ? true : false)
   end
 
   # Render `text` via a Shinonome glyph tuple at (x, y).
@@ -283,37 +178,6 @@ class ILI9342
     @dc.write(1)
     yield
     @cs.write(1)
-  end
-
-  # Fill the address-window rectangle with one repeated RGB565 colour.
-  # Uses 256-pair chunks so per-spi.write overhead is amortised — one DMA
-  # transaction per chunk instead of one per pixel. The byte stream emitted
-  # is identical to the per-pixel form.
-  CHUNK_PAIRS = 256
-
-  def fill_window(x0, y0, x1, y1, rgb565)
-    set_window(x0, y0, x1, y1)
-    hi = (rgb565 >> 8) & 0xFF
-    lo = rgb565 & 0xFF
-    chunk = [hi, lo] * CHUNK_PAIRS
-    pair_count = (x1 - x0 + 1) * (y1 - y0 + 1)
-    full_chunks, leftover_pairs = pair_count.divmod(CHUNK_PAIRS)
-    write_pixels do
-      full_chunks.times { @spi.write(chunk) }
-      @spi.write([hi, lo] * leftover_pairs) if leftover_pairs > 0
-    end
-  end
-
-  def plot_ellipse_points(cx, cy, dx, dy, rgb565, fill)
-    if fill
-      draw_line(cx - dx, cy + dy, cx + dx, cy + dy, rgb565)
-      draw_line(cx - dx, cy - dy, cx + dx, cy - dy, rgb565)
-    else
-      draw_pixel(cx + dx, cy + dy, rgb565)
-      draw_pixel(cx - dx, cy + dy, rgb565)
-      draw_pixel(cx + dx, cy - dy, rgb565)
-      draw_pixel(cx - dx, cy - dy, rgb565)
-    end
   end
 
   def hardware_reset
