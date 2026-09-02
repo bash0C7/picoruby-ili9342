@@ -1,70 +1,43 @@
-# picoruby-ili9342 — Repo-Local Rules for Claude Code
+# picoruby-ili9342
 
-This is a **PicoRuby Runtime Gem** following upstream `picoruby/picoruby`
-conventions. All logic is pure Ruby. There is no C extension and none
-should be added.
+PicoRuby mrbgem for the ILI9342C panel, laid out like upstream `picoruby/picoruby`
+gems: `mrbgem.rake`, `mrblib/ili9342.rb`, `src/ili9342.c` → `src/mruby/ili9342.c`,
+`test/*_test.rb` (picotest).
 
-## rst_pin / bl_pin on CoreS3 (important hardware note)
+## Split between Ruby and C
 
-On M5Stack CoreS3, the ILI9342C reset line and backlight control are NOT
-wired directly to ESP32-S3 GPIOs. They are routed through board-level
-controllers:
+- Ruby (`mrblib`): init sequence, rotation, backlight, `draw_rect` / `draw_ellipse`
+  wrappers, text blitting.
+- C (`src/mruby/ili9342.c`): `fill_rect`, `draw_pixel`, `draw_line`, `_draw_ellipse`.
+  Each issues CASET/RASET, RAMWR, and the pixel stream itself, so a shape is one
+  Ruby call. Pixels go out as Strings of up to 4 KB per `SPI#write`.
+- The bus is reached only through the injected `@spi` / `@dc` / `@cs` objects
+  (`SPI#write`, `GPIO#write`), from C via `mrb_funcall_id`. That is what lets the
+  host tests run against Ruby fakes, so do not call the SPI/GPIO C API directly.
+- CS must stay low across RAMWR and the whole pixel payload.
 
-- **rst_pin** — LCD reset is driven by the AW9523 IO expander (I2C addr 0x58),
-  not a free ESP32 GPIO. Pass a dummy GPIO (an unused, unwired pin number)
-  to `rst_pin:`. The actual reset pulse must be issued via AW9523 register
-  writes (P1 output register, pulse P1.1).
-- **bl_pin** — Backlight rail is the AXP2101 PMIC (I2C addr 0x34) DLDO1
-  output. Pass a dummy GPIO to `bl_pin:` and control backlight power by
-  configuring the AXP2101 LDO registers instead.
+## CoreS3 rst_pin / bl_pin
 
-The driver still calls `rst_pin.write(...)` and `bl_pin.write(...)` during
-`initialize` — on CoreS3 these calls are harmless no-ops on the dummy pin.
-The caller is responsible for doing the real reset and backlight enable
-through the appropriate controller before or after constructing `ILI9342`.
+LCD reset is on the AW9523 IO expander (I2C 0x58, P1.1) and the backlight rail is
+AXP2101 (I2C 0x34) DLDO1. Pass a dummy unwired GPIO for `rst_pin:` / `bl_pin:` and
+drive reset and backlight through those chips from the caller.
 
-These are two distinct chips with independent I2C addresses — do not
-conflate AW9523 (IO expander) with AXP2101 (PMIC).
+## PicoRuby compatibility (mrblib)
 
-## PicoRuby compatibility
-
-Per `~/CLAUDE.md` and the upstream gem convention, **avoid** these in
-`mrblib/*.rb`:
-
-- `defined?` (use `Object.const_defined?(:Sym)` instead)
-- `Hash#fetch`
-- `String#reverse`, `String#rjust`
-- inline `rescue`
-- `proc`, `lambda`
-
-`Machine.delay_ms` is used for hardware timing delays. The host test shim
-defines it as a no-op. On device it blocks for the given milliseconds.
-
-## SPI write API
-
-`@spi.write` accepts:
-- `Integer` — single byte
-- `Array` — flat byte array (used for chunk-fill in `fill_window`)
-- Splat of either form
-
-The `write_command` / `write_pixels` helpers manage CS and DC pin state.
-CS must remain asserted (LOW) across the entire RAMWR + pixel payload for
-correct hardware behavior — see `fill_window` implementation.
+Avoid `defined?` (use `Object.const_defined?`), `Hash#fetch`, `String#reverse`,
+`String#rjust`, inline `rescue`, `proc` / `lambda`. Prefer `while` loops.
 
 ## Tests
 
-- Host-side: `bundle exec rake test` (CRuby + test-unit, FakeSPI / FakeGPIO doubles).
-- FakeSPI tracks `command_bytes` (writes made while DC=LOW) separately from
-  raw `writes`, enabling command-vs-data semantic assertions without false
-  matches from data payload bytes that happen to equal command opcodes.
-- On-device: declared via `add_test_dependency 'picoruby-picotest'` in
-  `mrbgem.rake`; not wired to a host rake target.
+```
+PICORUBY_ROOT=path/to/picoruby rake test   # builds build/host with build_config/picoruby-test.rb, then picotest
+```
 
-## PicoRuby on-device require
-
-On device: `require 'ili9342'` (hyphenated, strip `picoruby-` prefix). Underscore form works only in CRuby host context.
+`test/ili9342_test.rb` carries FakeSPI / FakeGPIO; FakeSPI records `command_bytes`
+(writes while DC is low) apart from raw `writes`. Keep fakes free of CRuby-only
+Array methods (`count`, `flat_map`, enumerators).
 
 ## Git
 
-- Conventional Commits: `feat` / `fix` / `docs` / `test` / `refactor` / `chore`.
-- Imperative mood, English only.
+Conventional Commits (`feat` / `fix` / `docs` / `test` / `refactor` / `chore`),
+imperative mood, English.
