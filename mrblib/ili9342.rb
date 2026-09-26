@@ -145,8 +145,17 @@ class ILI9342
 
   # Stream one glyph cell: fg pixel where the row bit is set, bg otherwise.
   # One address window + one RAMWR transaction per glyph (not per pixel).
+  # A 16-row glyph goes through the glyph16 kernel when the firmware carries
+  # it (stackchan-picoruby's aot/kernels, compiled ahead of time): the same
+  # bytes in one SPI write.
   def blit_glyph(x, y, w, h, rows, fg, bg)
     set_window(x, y, x + w - 1, y + h - 1)
+    if h == 16 && respond_to?(:glyph16, true)
+      cell = glyph16(w, fg, bg, rows[0], rows[1], rows[2], rows[3], rows[4], rows[5], rows[6], rows[7],
+                     rows[8], rows[9], rows[10], rows[11], rows[12], rows[13], rows[14], rows[15])
+      write_pixels { @spi.write(cell) }
+      return
+    end
     fg_hi = (fg >> 8) & 0xFF; fg_lo = fg & 0xFF
     bg_hi = (bg >> 8) & 0xFF; bg_lo = bg & 0xFF
     write_pixels do

@@ -355,3 +355,62 @@ class DrawTextTest < Picotest::Test
     assert_equal 2, count_in(@spi.command_bytes, ILI9342::CMD_CASET)
   end
 end
+
+# blit_glyph hands a 16-row glyph to a glyph16 kernel when one is defined. The
+# stand-in below is the kernel's Ruby body (stackchan-picoruby aot/kernels).
+class Glyph16KernelTest < Picotest::Test
+  include LcdFixture
+  WHITE = 0xFFFF
+  BLACK = 0x0000
+
+  def glyph16_body(w, fg, bg, *rows)
+    out = ""
+    i = 0
+    while i < rows.size
+      bit = w - 1
+      while bit >= 0
+        c = ((rows[i] >> bit) & 1) == 1 ? fg : bg
+        out << ((c >> 8) & 0xFF).chr << (c & 0xFF).chr
+        bit -= 1
+      end
+      i += 1
+    end
+    out
+  end
+
+  def glyph
+    rows = []
+    i = 0
+    while i < 16
+      rows << ((i * 40503 + 12345) & 0xFFFF)
+      i += 1
+    end
+    [16, 16, [16], [rows]]
+  end
+
+  def draw(spi, dc)
+    display = new_display(spi, dc: dc)
+    spi.reset_log!
+    display.draw_glyphs(0, 0, glyph, WHITE, BLACK)
+    spi
+  end
+
+  def test_kernel_path_streams_the_same_bytes
+    dc = FakeGPIO.new(2)
+    spi = FakeSPI.new
+    spi.dc_pin = dc
+    plain = draw(spi, dc).bytes
+
+    body = method(:glyph16_body)
+    Object.define_method(:glyph16) { |*a| body.call(*a) }
+    begin
+      dc2 = FakeGPIO.new(2)
+      spi2 = FakeSPI.new
+      spi2.dc_pin = dc2
+      with_kernel = draw(spi2, dc2).bytes
+    ensure
+      Object.send(:remove_method, :glyph16)
+    end
+    assert_equal plain, with_kernel
+  end
+end
