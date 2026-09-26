@@ -31,25 +31,14 @@ require 'spi'
 require 'gpio'
 require 'ili9342'
 
-spi    = SPI.new(unit: :ESP32_SPI2, frequency: 40_000_000,
-                 sck_pin: 36, mosi_pin: 37, miso_pin: 35)
-dc_pin = GPIO.new(4, GPIO::OUT)
-cs_pin = GPIO.new(3, GPIO::OUT)
-# rst_pin and bl_pin: on CoreS3 these are routed through the AW9523 IO expander
-# and AXP2101 PMIC — pass a dummy GPIO (unused pin) here and drive reset/backlight
-# via the IO expander instead.
-rst_pin = GPIO.new(1, GPIO::OUT)  # dummy — driven by AW9523, not directly
-bl_pin  = GPIO.new(1, GPIO::OUT)  # dummy — driven by AXP2101 DLDO1 rail
-# Note: both rst_pin and bl_pin point to the same unwired dummy pin (1).
-# This is intentional and harmless: real reset and backlight are handled
-# externally via AW9523 IO expander and AXP2101 PMIC respectively.
-
+spi = SPI.new(unit: :ESP32_SPI3_HOST, frequency: 40_000_000,
+              sck_pin: 36, copi_pin: 37, mode: 2)
 lcd = ILI9342.new(
   spi: spi,
-  dc_pin: dc_pin,
-  cs_pin: cs_pin,
-  rst_pin: rst_pin,
-  bl_pin: bl_pin,
+  dc_pin: GPIO.new(35, GPIO::OUT),
+  cs_pin: GPIO.new(3, GPIO::OUT),
+  rst_pin: GPIO.new(1, GPIO::OUT),
+  bl_pin: GPIO.new(2, GPIO::OUT),
   width: 320,
   height: 240,
   rotation: :landscape
@@ -58,6 +47,8 @@ lcd = ILI9342.new(
 lcd.fill(ILI9342::Color::BLACK)
 lcd.draw_pixel(10, 10, ILI9342::Color::RED)
 ```
+
+`rst_pin` / `bl_pin` are unwired GPIOs: on CoreS3 reset and backlight are driven via the AW9523 IO expander and AXP2101 PMIC instead.
 
 ## Public API
 

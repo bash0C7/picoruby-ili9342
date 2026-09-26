@@ -22,6 +22,10 @@ LCD reset is on the AW9523 IO expander (I2C 0x58, P1.1) and the backlight rail i
 AXP2101 (I2C 0x34) DLDO1. Pass a dummy unwired GPIO for `rst_pin:` / `bl_pin:` and
 drive reset and backlight through those chips from the caller.
 
+## コメント
+
+コメントを書かない。コードは How、テストは What (テスト名)、コミットログは Why を担う。残すのは toolchain が読むもの (magic comment、型注釈、rigor/steep 指示) だけ。
+
 ## PicoRuby compatibility (mrblib)
 
 Avoid `defined?` (use `Object.const_defined?`), `Hash#fetch`, `String#reverse`,
