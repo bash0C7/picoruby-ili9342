@@ -1,47 +1,28 @@
-# ILI9342C over an injected SPI object and DC/CS/RST/BL GPIO objects. The
-# drawing primitives (fill_rect / draw_pixel / draw_line / _draw_ellipse) are C:
-# src/mruby/ili9342.c.
 class ILI9342
-  # MADCTL bits: MY|MX|MV|ML|BGR|MH|0|0
-  # Values per the CoreS3 panel reference (CoreS3 native landscape, BGR).
-  MADCTL_LANDSCAPE      = 0x08  # default: swap_xy=false, mirror_*=false, BGR=1
-  MADCTL_PORTRAIT       = 0x68  # MV+MX+BGR (rotate 90° CW)
-  MADCTL_LANDSCAPE_FLIP = 0xC8  # MY+MX+BGR (180° rotation)
-  MADCTL_PORTRAIT_FLIP  = 0xA8  # MV+MY+BGR (rotate 90° CCW)
+  MADCTL_LANDSCAPE      = 0x08
+  MADCTL_PORTRAIT       = 0x68
+  MADCTL_LANDSCAPE_FLIP = 0xC8
+  MADCTL_PORTRAIT_FLIP  = 0xA8
 
-  # Commands — only those actually emitted by the driver. References point
-  # to the Ilitek ILI9342C datasheet V100 sections.
-  CMD_SWRESET = 0x01  # §8.2.2  Software Reset
-  CMD_SLPOUT  = 0x11  # §8.2.12 Sleep OUT
-  CMD_INVON   = 0x21  # §8.2.16 Display Inversion ON (CoreS3 panel needs invert)
-  CMD_DISPON  = 0x29  # §8.2.19 Display ON
-  CMD_CASET   = 0x2A  # §8.2.20 Column Address Set
-  CMD_RASET   = 0x2B  # §8.2.21 Page Address Set
-  CMD_RAMWR   = 0x2C  # §8.2.22 Memory Write
-  CMD_MADCTL  = 0x36  # §8.2.29 Memory Access Control
-  CMD_COLMOD  = 0x3A  # §8.2.33 COLMOD: Pixel Format Set
-  CMD_SETEXTC = 0xC8  # §8.3.24 Set EXTC — unlocks Level-2 commands
+  CMD_SWRESET = 0x01
+  CMD_SLPOUT  = 0x11
+  CMD_INVON   = 0x21
+  CMD_DISPON  = 0x29
+  CMD_CASET   = 0x2A
+  CMD_RASET   = 0x2B
+  CMD_RAMWR   = 0x2C
+  CMD_MADCTL  = 0x36
+  CMD_COLMOD  = 0x3A
+  CMD_SETEXTC = 0xC8
 
-  # SETEXTC payload that unlocks Level-2 commands. Until this is sent, every
-  # command in the 0xB0..0xFF range is treated as NOP. See §8.3.x where each
-  # Level-2 command is annotated "Set EXTC(C8h)=FF,93,42 to enable this command".
   SETEXTC_UNLOCK_PAYLOAD = [0xFF, 0x93, 0x42].freeze
 
-  # Minimal ILI9342C-compliant init. Only datasheet-verified Level-1 bytes
-  # plus the Level-2 unlock prologue. Power / VCOM / frame-rate / gamma are
-  # NOT customised here — those fall back to the chip's hardware-reset
-  # defaults (sane per datasheet, see audit doc).
-  #
-  # MADCTL (0x36) is intentionally absent: set_rotation() is the sole owner
-  # so the user's `rotation:` kwarg is respected.
-  #
-  # Each entry: [cmd_byte, [payload_bytes...], delay_ms]
   INIT_COMMANDS = [
     [CMD_SETEXTC, SETEXTC_UNLOCK_PAYLOAD,                                0],
     [CMD_SWRESET, [],                                                  120],
     [CMD_SLPOUT,  [],                                                  120],
-    [CMD_COLMOD,  [0x55],                                                0],  # 16-bit RGB565
-    [CMD_INVON,   [],                                                    0],  # CoreS3 panel inverts
+    [CMD_COLMOD,  [0x55],                                                0],
+    [CMD_INVON,   [],                                                    0],
     [CMD_DISPON,  [],                                                  100],
   ].freeze
 
@@ -65,7 +46,6 @@ class ILI9342
     @bl     = bl_pin
     @width  = width
     @height = height
-    @rotation = rotation
 
     hardware_reset
     send_init_sequence
@@ -110,19 +90,15 @@ class ILI9342
   end
 
   def draw_ellipse(cx, cy, rx, ry, rgb565, fill: false)
-    _draw_ellipse(cx, cy, rx, ry, rgb565, fill ? true : false)
+    _draw_ellipse(cx, cy, rx, ry, rgb565, fill)
   end
 
-  # Render `text` via a Shinonome glyph tuple at (x, y).
-  # font: one of "go12"/"go16"/"min12"/"min16"/"maru12"; scale 1..4.
   def draw_text(x, y, text, font: "go16", scale: 1, fg: Color::WHITE, bg: Color::BLACK)
     tuple = Shinonome.send(font, text, scale)
     return unless tuple
     draw_glyphs(x, y, tuple, fg, bg)
   end
 
-  # Blit a Shinonome [height, total_width, widths[], glyphs[]] tuple at (x, y).
-  # Public so it is host-testable with a literal tuple (no font gem needed).
   def draw_glyphs(x, y, tuple, fg, bg)
     height = tuple[0]
     widths = tuple[2]
@@ -143,9 +119,6 @@ class ILI9342
     write_command(CMD_RASET, [(y0 >> 8) & 0xFF, y0 & 0xFF, (y1 >> 8) & 0xFF, y1 & 0xFF])
   end
 
-  # Stream one glyph cell: fg pixel where the row bit is set, bg otherwise.
-  # One address window + one RAMWR transaction per glyph (not per pixel).
-  # A 16-row glyph goes through the glyph16 AOT kernel when the firmware has it.
   def blit_glyph(x, y, w, h, rows, fg, bg)
     set_window(x, y, x + w - 1, y + h - 1)
     if h == 16 && respond_to?(:glyph16, true)
@@ -176,8 +149,6 @@ class ILI9342
     end
   end
 
-  # Begin RAMWR transaction, yield to block that writes pixel bytes via @spi,
-  # then end transaction. Shared CS/DC pattern for fill / draw_rect / draw_pixel.
   def write_pixels
     @cs.write(0)
     @dc.write(0)
@@ -203,7 +174,7 @@ class ILI9342
     end
   end
 
-  def write_command(cmd, payload = [])
+  def write_command(cmd, payload)
     @cs.write(0)
     @dc.write(0)
     @spi.write(cmd & 0xFF)

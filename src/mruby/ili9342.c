@@ -5,25 +5,16 @@
 #include "mruby/string.h"
 #include "mruby/variable.h"
 
-/*
- * Drawing primitives. Each one issues the address window, RAMWR, and the
- * pixel stream itself, so Ruby makes one call per shape instead of one per
- * span. Bus access goes through the injected @spi / @dc / @cs objects
- * (SPI#write, GPIO#write), so the same code runs against host fakes.
- */
-
 #define CMD_CASET 0x2A
 #define CMD_RASET 0x2B
 #define CMD_RAMWR 0x2C
-/* One SPI#write per chunk. The ESP32 bus is created without max_transfer_sz, so
- * esp_driver_spi caps a transfer at one DMA descriptor: 4092 bytes. Stay under it. */
 #define CHUNK_PIXELS 1024
 
 typedef struct {
   mrb_state *mrb;
   mrb_value spi, dc, cs;
   mrb_int width, height;
-  mrb_value chunk;       /* String of CHUNK_PIXELS pixels in the current colour */
+  mrb_value chunk;
   uint16_t chunk_color;
   mrb_bool chunk_valid;
 } lcd_t;
@@ -76,7 +67,6 @@ set_window(lcd_t *lcd, mrb_int x0, mrb_int y0, mrb_int x1, mrb_int y1)
   write_command(lcd, CMD_RASET, row, 4);
 }
 
-/* String of `pixels` RGB565 big-endian pixels, reused across spans of one shape. */
 static mrb_value
 color_chunk(lcd_t *lcd, uint16_t color, mrb_int pixels)
 {
@@ -94,7 +84,6 @@ color_chunk(lcd_t *lcd, uint16_t color, mrb_int pixels)
   return mrb_str_new(lcd->mrb, RSTRING_PTR(lcd->chunk), pixels * 2);
 }
 
-/* Window + RAMWR + `pixels` pixels of one colour. Caller clips. */
 static void
 fill_window(lcd_t *lcd, mrb_int x0, mrb_int y0, mrb_int x1, mrb_int y1, uint16_t color)
 {
@@ -114,7 +103,6 @@ fill_window(lcd_t *lcd, mrb_int x0, mrb_int y0, mrb_int x1, mrb_int y1, uint16_t
   pin_write(lcd, lcd->cs, 1);
 }
 
-/* One horizontal run, clipped to the panel. */
 static void
 write_span(lcd_t *lcd, mrb_int xa, mrb_int xb, mrb_int y, uint16_t color)
 {
@@ -132,7 +120,6 @@ draw_pixel(lcd_t *lcd, mrb_int x, mrb_int y, uint16_t color)
   fill_window(lcd, x, y, x, y, color);
 }
 
-/* Bresenham, emitting each run of pixels on one row as a single span. */
 static void
 draw_line(lcd_t *lcd, mrb_int x0, mrb_int y0, mrb_int x1, mrb_int y1, uint16_t color)
 {
@@ -175,7 +162,6 @@ plot_ellipse_points(lcd_t *lcd, mrb_int cx, mrb_int cy, mrb_int dx, mrb_int dy, 
   }
 }
 
-/* Midpoint ellipse, same arithmetic as the reference Ruby implementation. */
 static void
 draw_ellipse(lcd_t *lcd, mrb_int cx, mrb_int cy, mrb_int rx, mrb_int ry, uint16_t color, mrb_bool fill)
 {
@@ -184,7 +170,6 @@ draw_ellipse(lcd_t *lcd, mrb_int cx, mrb_int cy, mrb_int rx, mrb_int ry, uint16_
   mrb_int two_rx2 = 2 * rx2, two_ry2 = 2 * ry2;
   mrb_int x = 0, y = ry, px = 0, py = two_rx2 * y;
 
-  /* Region 1: 4*ry2 - 4*rx2*ry + rx2 rounded to the nearest whole unit */
   mrb_int p = (4 * ry2 - 4 * rx2 * ry + rx2 + 2) / 4;
   plot_ellipse_points(lcd, cx, cy, x, y, color, fill);
   while (px < py) {
@@ -200,7 +185,6 @@ draw_ellipse(lcd_t *lcd, mrb_int cx, mrb_int cy, mrb_int rx, mrb_int ry, uint16_
     plot_ellipse_points(lcd, cx, cy, x, y, color, fill);
   }
 
-  /* Region 2: ry2*(x+0.5)^2 + rx2*(y-1)^2 - rx2*ry2, in quarter units then rounded */
   mrb_int q = ry2 * (2 * x + 1) * (2 * x + 1) + 4 * rx2 * (y - 1) * (y - 1) - 4 * rx2 * ry2;
   p = (q + 2) / 4;
   while (y > 0) {

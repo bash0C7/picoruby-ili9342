@@ -1,6 +1,3 @@
-# Runs on a host picoruby VM with this gem compiled in (rake test).
-# FakeSPI / FakeGPIO stand in for the injected bus objects and record every
-# call; command bytes are the SPI writes made while DC is low.
 class FakeSPI
   attr_reader :writes, :command_bytes, :command_positions
   attr_accessor :dc_pin
@@ -24,7 +21,6 @@ class FakeSPI
     @command_positions = []
   end
 
-  # Integer bytes only (no markers).
   def bytes
     out = []
     i = 0
@@ -167,7 +163,6 @@ class ILI9342FillTest < Picotest::Test
   def setup
     @spi = FakeSPI.new
     @cs = FakeGPIO.new(3)
-    # A small panel: the fake keeps every byte in an Array.
     @display = new_display(@spi, cs: @cs, width: 32, height: 24)
     @spi.reset_log!
     @cs.history.clear
@@ -185,7 +180,6 @@ class ILI9342FillTest < Picotest::Test
 
   def test_fill_keeps_cs_asserted_across_ramwr_and_pixel_data
     @display.fill(ILI9342::Color::RED)
-    # CASET, RASET, then one RAMWR+pixels transaction: three 1->0 transitions.
     transitions = 0
     prev = 1
     @cs.history.each do |v|
@@ -266,7 +260,6 @@ class ILI9342DrawLineTest < Picotest::Test
     @spi.reset_log!
   end
 
-  # A run of pixels on one row is one window and one RAMWR, not one per pixel.
   def test_horizontal_line_is_one_transaction_carrying_every_pixel
     @display.draw_line(5, 5, 14, 5, 0xFFFF)
     assert_equal 1, @spi.count(ILI9342::CMD_RAMWR)
@@ -316,7 +309,6 @@ class ILI9342DrawEllipseTest < Picotest::Test
 
   def test_filled_ellipse_widest_run_spans_the_full_width
     @display.draw_ellipse(50, 50, 10, 5, 0xFFFF, fill: true)
-    # A run at cy covers cx-rx..cx+rx: CASET payload 40..60 must appear.
     bytes = @spi.bytes
     found = false
     i = 0
@@ -341,7 +333,6 @@ class DrawTextTest < Picotest::Test
     @spi.reset_log!
   end
 
-  # Tuple = [height, total_width, widths[], glyphs[]]; row Integer MSB = leftmost.
   def test_draw_glyphs_sets_window_and_streams_fg_bg_pixel_pairs
     @display.draw_glyphs(0, 0, [2, 2, [2], [[0b10, 0b01]]], WHITE, BLACK)
     assert(@spi.command_bytes.index(ILI9342::CMD_CASET))
@@ -356,8 +347,6 @@ class DrawTextTest < Picotest::Test
   end
 end
 
-# blit_glyph hands a 16-row glyph to a glyph16 kernel when one is defined. The
-# stand-in below is the kernel's Ruby body (stackchan-picoruby aot/kernels).
 class Glyph16KernelTest < Picotest::Test
   include LcdFixture
   WHITE = 0xFFFF

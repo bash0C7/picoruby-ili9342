@@ -1,5 +1,3 @@
-# Tests run on a host picoruby VM with this gem (C included) compiled in.
-# PICORUBY_ROOT points at a picoruby checkout (default: ../picoruby).
 PICORUBY_ROOT = File.expand_path(ENV["PICORUBY_ROOT"] || "../picoruby", __dir__)
 PICORUBY_VM   = File.join(PICORUBY_ROOT, "build", "host", "bin", "picoruby")
 TEST_CONFIG   = File.expand_path("build_config/picoruby-test.rb", __dir__)

@@ -1,4 +1,3 @@
-# Host picotest VM: upstream picoruby-test.rb plus this gem. Used by `rake test`.
 MRuby::Build.new do |conf|
   conf.toolchain :gcc
 
@@ -12,7 +11,6 @@ MRuby::Build.new do |conf|
 
   conf.picoruby
 
-  # Link OpenSSL libraries for socket SSL support
   conf.linker.libraries << 'ssl'
   conf.linker.libraries << 'crypto'
 
